@@ -1,0 +1,163 @@
+def createVersion() {
+    return new Date().format('yyyyMMddHHmmss')
+}
+
+pipeline {
+    agent any
+
+    environment {
+        internal_port1 = 8000
+        external_port1 = 31130
+        service_name = 'zen-task'
+        host_image_name = "${harbor_host}/backend/${service_name}"
+        domain_image_name = "${harbor_domain}/backend/${service_name}"
+        repository_url = "https://github.com/lin-gooo/zen-task.git"
+    }
+
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 60, unit: 'MINUTES')
+    }
+
+    stages {
+        stage('Check Workspace') {
+            steps {
+                script {
+                    echo "当前工作目录: ${WORKSPACE}"
+                    sh 'whoami'
+                }
+            }
+        }
+
+        stage('Print All Environment') {
+		    steps {
+			   script {
+			      sh 'printenv'
+			   }
+			}
+		}
+
+        stage('Check Branch') {
+            steps {
+                script {
+                    _version = createVersion()
+                    def rawBranchName = env.gitlabBranch ?: ""
+                    def branchName = rawBranchName.replaceAll("refs/(tags|heads)/", "")
+                    echo "原始触发分支: ${rawBranchName} 处理后分支：${branchName}"
+                    if (branchName.contains('main')) {
+                        env.branch = 'main'
+                        env.SERVICE_ENV = 'prod'
+                        env._version = "prod_" + _version
+                        echo "main 分支构建: ${env._version}"
+                    }
+
+                    else if (branchName.contains('branch')) {
+                        env.branch = "dev"
+                        env.SERVICE_ENV = "dev"
+                        env._version = "dev_" + _version
+                        echo "${env.branch} 分支构建：${env._version}"
+                    }
+
+                    // 其他情况
+                    else {
+                        echo "未识别触发类型，使用默认配置"
+                        env.branch = "dev"
+                        env.SERVICE_ENV = "dev"
+                        env._version = "dev_" + _version
+                    }
+
+                    echo "环境变量: SERVICE_ENV=${env.SERVICE_ENV}, 项目分支=${env.branch}, 项目版本=${env._version}"
+                }
+            }
+        }
+
+        stage('Check Code') {
+            steps {
+                script {
+                    try {
+                        echo "git fetch 代码"
+                        sh """
+                            git config --global credential.helper store
+                            git fetch --all
+                            git remote prune origin
+                        """
+                    } catch (e) {
+                        error "git fetch 代码失败: ${e}"
+                    }
+                }
+            }
+        }
+
+
+        stage('Get Code') {
+            steps {
+                script {
+                    try {
+                        echo "代码获取 ${branch} 分支"
+                        checkout scmGit(branches: [[name: "*/${branch}"]], extensions: [], userRemoteConfigs: [[credentialsId: "GithubToken", url: "${repository_url}"]])
+                    } catch (e) {
+                        error "获取代码失败: ${e}"
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    try {
+                        echo "构建镜像"
+                        withCredentials([
+                            string(credentialsId: 'harbor_username', variable: 'HARBOR_USERNAME'),
+                            string(credentialsId: 'harbor_password', variable: 'HARBOR_PASSWORD')
+                        ]) {
+                            sh """
+                            echo "$HARBOR_PASSWORD" | docker login ${harbor_domain} -u $HARBOR_USERNAME --password-stdin
+                            """
+                        }
+
+                        sh """
+                        docker build --build-arg LIB_PACKAGE_BRANCH=${LIB_PACKAGE_BRANCH} -t ${host_image_name}:${env._version} .
+                        docker push ${host_image_name}:${env._version}
+                        docker rmi -f ${host_image_name}:${env._version}
+                        """
+                    } catch (e) {
+                        error "构建失败: ${e}"
+                    }
+                }
+            }
+        }
+        stage('Deploy Service') {
+            steps {
+                script {
+                    try {
+                        echo "部署服务"
+                        def node = env.SERVICE_ENV == 'prod' ? env.prod_node_1 : env.dev_node_1
+
+                        withCredentials([
+                            string(credentialsId: 'harbor-username', variable: 'HARBOR_USERNAME'),
+                            string(credentialsId: 'harbor-password', variable: 'HARBOR_PASSWORD')
+                        ]) {
+                            sh """
+                            echo "$HARBOR_PASSWORD" | ssh -o StrictHostKeyChecking=no root@${node} 'docker login ${harbor_domain} -u $HARBOR_USERNAME --password-stdin'
+                            """
+                        }
+
+                        sh """
+                        ssh root@${node} 'docker pull ${domain_image_name}:${env._version}'
+                        echo "停止并删除现有容器: ${service_name}"
+                        ssh root@${node} 'docker stop ${service_name} || true'
+                        ssh root@${node} 'docker rm  -f ${service_name} || true'
+                        ssh root@${node} 'docker run -d --name ${service_name} -e environ=${SERVICE_ENV} -v /data/logs/${service_name}:/data/logs/${service_name} -p ${external_port1}:${internal_port1} ${domain_image_name}:${env._version}'
+                        echo "清理旧镜像"
+                        ssh root@${node} 'docker image prune -af --filter "until=24h"'
+                        """
+                        echo "${env.service_name} 服务已部署!"
+                    } catch (e) {
+                        error "部署服务失败: ${e}"
+                    }
+                }
+            }
+        }
+    }
+}
