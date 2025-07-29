@@ -11,7 +11,7 @@ pipeline {
         service_name = 'zen-task'
         host_image_name = "${harbor_host}/backend/${service_name}"
         domain_image_name = "${harbor_domain}/backend/${service_name}"
-        repository_url = "https://github.com/lin-gooo/zen-task.git"
+        repository_url = "https://github.com/liuyulin-1024/zen-task.git"
     }
 
     options {
