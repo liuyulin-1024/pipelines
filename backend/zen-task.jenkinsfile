@@ -117,7 +117,7 @@ pipeline {
                         }
 
                         sh """
-                        docker build --build-arg LIB_PACKAGE_BRANCH=${LIB_PACKAGE_BRANCH} -t ${host_image_name}:${env._version} .
+                        docker build -t ${host_image_name}:${env._version} .
                         docker push ${host_image_name}:${env._version}
                         docker rmi -f ${host_image_name}:${env._version}
                         """
