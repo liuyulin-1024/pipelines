@@ -3,11 +3,10 @@ pipeline {
     tools {git 'Default'}
 
     environment {
-        SERVICE_ENV = "dev"
-        internal_port1 = 80
-        external_port1 = 18000
+        branch = 'test'
+        SERVICE_ENV = "test"
         service_name = 'backend'
-        data_id = 'dev.yaml'
+        data_id = 'test.yaml'
         group_id = 'Backend'
         image_name = "${harbor_domain}/backend/${service_name}"
         repository_url = "git@github.com:AutoGameAI/Backend.git"
@@ -30,28 +29,10 @@ pipeline {
             }
         }
 
-        stage('Check Branch') {
+        stage('Prepare Environment') {
             steps {
                 script {
-                    if (env.BRANCH_NAME) {
-                        env.branch = env.BRANCH_NAME
-                        echo "BRANCH_NAME：${env.branch}"
-                    } else if (env.GIT_BRANCH) {
-                        env.branch = env.GIT_BRANCH.tokenize('/').last()
-                        echo "GIT_BRANCH：${env.GIT_BRANCH} ${env.branch}"
-                    } else {
-                        env.branch = sh(
-                            script: "git rev-parse --abbrev-ref HEAD",
-                            returnStdout: true
-                        ).trim()
-                        echo "GIT_COMMAND：${env.branch}"
-                    }
-
-                    if (!env.branch.startsWith('branch')) {
-                        error("⛔ 非测试环境分支触发，终止构建: ${env.branch}")
-                    }
-
-                    env._version = "dev_" + new Date().format('yyyyMMddHHmmss')
+                    env._version = "test_" + new Date().format('yyyyMMddHHmmss')
                     echo "构建分支：${env.branch} 版本号：${env._version}"
                 }
             }
@@ -89,9 +70,9 @@ pipeline {
                             }
                             sh """
                             docker build -t ${image_name}:${env._version} .
-                            docker tag ${image_name}:${env._version} ${image_name}:dev_latest
-                            docker push ${image_name}:dev_latest
-                            docker rmi -f ${image_name}:${env._version} ${image_name}:dev_latest
+                            docker tag ${image_name}:${env._version} ${image_name}:test_latest
+                            docker push ${image_name}:test_latest
+                            docker rmi -f ${image_name}:${env._version} ${image_name}:test_latest
                             """
                         }
                     } catch (e) {
@@ -105,7 +86,7 @@ pipeline {
             steps {
                 script {
                     try {
-                        def node = env.dev_node_1
+                        def node = env.test_node_1
                         echo "部署服务：${node}"
                         withCredentials([
                             string(credentialsId: 'harbor_username', variable: 'HARBOR_USERNAME'),
@@ -142,17 +123,6 @@ pipeline {
                         ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml up -d'
                         echo "服务部署成功：${env.service_name}"
                         """
-
-//                         sh """
-//                         ssh root@${node} 'docker pull ${image_name}:${env._version}'
-//                         echo "停止并删除现有容器: ${service_name}"
-//                         ssh root@${node} 'docker stop ${service_name} || true'
-//                         ssh root@${node} 'docker rm  -f ${service_name} || true'
-//                         ssh root@${node} 'docker run -d --name ${service_name} -e environ=${SERVICE_ENV} -p ${external_port1}:${internal_port1} -v /etc/${service_name}/docker-compose.yaml:/workspaces/docker-compose.yaml ${image_name}:${env._version}'
-//                         echo "清理旧镜像"
-//                         ssh root@${node} 'docker image prune -af --filter "until=24h"'
-//                         echo "服务部署成功：${env.service_name}"
-//                         """
                     } catch (e) {
                         error "服务部署失败: ${e}"
                     }
