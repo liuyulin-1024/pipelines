@@ -73,6 +73,7 @@ pipeline {
                             sh """
                             docker build -t ${image_name}:${env._version} .
                             docker push ${image_name}:${env._version}
+                            docker tag ${image_name}:${env._version} ${image_name}:latest
                             docker rmi -f ${image_name}:${env._version}
                             """
                         }
@@ -120,15 +121,21 @@ pipeline {
                         }
 
                         sh """
-                        ssh root@${node} 'docker pull ${image_name}:${env._version}'
-                        echo "停止并删除现有容器: ${service_name}"
-                        ssh root@${node} 'docker stop ${service_name} || true'
-                        ssh root@${node} 'docker rm  -f ${service_name} || true'
-                        ssh root@${node} 'docker run -d --name ${service_name} -e environ=${SERVICE_ENV} -p ${external_port1}:${internal_port1} -v /etc/${service_name}/docker-compose.yaml:/workspaces/docker-compose.yaml ${image_name}:${env._version}'
-                        echo "清理旧镜像"
-                        ssh root@${node} 'docker image prune -af --filter "until=24h"'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml down'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml up -d'
                         echo "服务部署成功：${env.service_name}"
                         """
+
+//                         sh """
+//                         ssh root@${node} 'docker pull ${image_name}:${env._version}'
+//                         echo "停止并删除现有容器: ${service_name}"
+//                         ssh root@${node} 'docker stop ${service_name} || true'
+//                         ssh root@${node} 'docker rm  -f ${service_name} || true'
+//                         ssh root@${node} 'docker run -d --name ${service_name} -e environ=${SERVICE_ENV} -p ${external_port1}:${internal_port1} -v /etc/${service_name}/docker-compose.yaml:/workspaces/docker-compose.yaml ${image_name}:${env._version}'
+//                         echo "清理旧镜像"
+//                         ssh root@${node} 'docker image prune -af --filter "until=24h"'
+//                         echo "服务部署成功：${env.service_name}"
+//                         """
                     } catch (e) {
                         error "服务部署失败: ${e}"
                     }
