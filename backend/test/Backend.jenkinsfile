@@ -3,11 +3,12 @@ pipeline {
     tools {git 'Default'}
 
     environment {
-        branch = 'test'
+        branch = 'branch0723'
         SERVICE_ENV = "test"
         service_name = 'backend'
-        data_id = 'test.yaml'
         group_id = 'Backend'
+        docker_data_id = 'test.yaml'
+        credentials_data_id = 'credentials.json'
         image_name = "${harbor_domain}/backend/${service_name}"
         repository_url = "git@github.com:AutoGameAI/Backend.git"
         GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
@@ -112,14 +113,15 @@ pipeline {
                                 bash fetch_nacos.sh
                                 ssh root@${node} 'mkdir -p /etc/${env.service_name}/'
                                 scp -o StrictHostKeyChecking=no docker-compose.yaml root@${node}:/etc/${env.service_name}/
-                                rm docker-compose.yaml
+                                scp -o StrictHostKeyChecking=no credentials.json root@${node}:/etc/${env.service_name}/
+                                rm docker-compose.yaml credentials.json
                                 """
                                 echo "[Nacos] 配置已推送到 ${node}"
                             }
                         }
 
                         sh """
-                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml down'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml down --remove-orphans || true'
                         ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml up -d'
                         echo "服务部署成功：${env.service_name}"
                         """

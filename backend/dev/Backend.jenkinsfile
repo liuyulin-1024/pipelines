@@ -3,12 +3,14 @@ pipeline {
     tools {git 'Default'}
 
     environment {
+        branch = 'main'
         SERVICE_ENV = "dev"
         internal_port1 = 80
         external_port1 = 18000
         service_name = 'backend'
-        data_id = 'dev.yaml'
         group_id = 'Backend'
+        docker_data_id = 'dev.yaml'
+        credentials_data_id = 'credentials.json'
         image_name = "${harbor_domain}/backend/${service_name}"
         repository_url = "git@github.com:AutoGameAI/Backend.git"
         GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
@@ -30,27 +32,9 @@ pipeline {
             }
         }
 
-        stage('Check Branch') {
+        stage('Prepare Environment') {
             steps {
                 script {
-                    if (env.BRANCH_NAME) {
-                        env.branch = env.BRANCH_NAME
-                        echo "BRANCH_NAME：${env.branch}"
-                    } else if (env.GIT_BRANCH) {
-                        env.branch = env.GIT_BRANCH.tokenize('/').last()
-                        echo "GIT_BRANCH：${env.GIT_BRANCH} ${env.branch}"
-                    } else {
-                        env.branch = sh(
-                            script: "git rev-parse --abbrev-ref HEAD",
-                            returnStdout: true
-                        ).trim()
-                        echo "GIT_COMMAND：${env.branch}"
-                    }
-
-                    if (!env.branch.startsWith('branch')) {
-                        error("⛔ 非测试环境分支触发，终止构建: ${env.branch}")
-                    }
-
                     env._version = "dev_" + new Date().format('yyyyMMddHHmmss')
                     echo "构建分支：${env.branch} 版本号：${env._version}"
                 }
@@ -131,28 +115,18 @@ pipeline {
                                 bash fetch_nacos.sh
                                 ssh root@${node} 'mkdir -p /etc/${env.service_name}/'
                                 scp -o StrictHostKeyChecking=no docker-compose.yaml root@${node}:/etc/${env.service_name}/
-                                rm docker-compose.yaml
+                                scp -o StrictHostKeyChecking=no credentials.json root@${node}:/etc/${env.service_name}/
+                                rm docker-compose.yaml credentials.json
                                 """
                                 echo "[Nacos] 配置已推送到 ${node}"
                             }
                         }
 
                         sh """
-                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml down'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml down --remove-orphans || true'
                         ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml up -d'
                         echo "服务部署成功：${env.service_name}"
                         """
-
-//                         sh """
-//                         ssh root@${node} 'docker pull ${image_name}:${env._version}'
-//                         echo "停止并删除现有容器: ${service_name}"
-//                         ssh root@${node} 'docker stop ${service_name} || true'
-//                         ssh root@${node} 'docker rm  -f ${service_name} || true'
-//                         ssh root@${node} 'docker run -d --name ${service_name} -e environ=${SERVICE_ENV} -p ${external_port1}:${internal_port1} -v /etc/${service_name}/docker-compose.yaml:/workspaces/docker-compose.yaml ${image_name}:${env._version}'
-//                         echo "清理旧镜像"
-//                         ssh root@${node} 'docker image prune -af --filter "until=24h"'
-//                         echo "服务部署成功：${env.service_name}"
-//                         """
                     } catch (e) {
                         error "服务部署失败: ${e}"
                     }
