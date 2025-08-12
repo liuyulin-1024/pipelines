@@ -121,8 +121,8 @@ pipeline {
                         }
 
                         sh """
-                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml down --remove-orphans || true'
-                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml up -d'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p magi-backend down --remove-orphans || true'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p magi-backend up -d'
                         echo "服务部署成功：${env.service_name}"
                         """
                     } catch (e) {
