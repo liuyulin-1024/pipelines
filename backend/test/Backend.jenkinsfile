@@ -71,9 +71,8 @@ pipeline {
                             }
                             sh """
                             docker build -t ${image_name}:${env._version} .
-                            docker tag ${image_name}:${env._version} ${image_name}:test_latest
-                            docker push ${image_name}:test_latest
-                            docker rmi -f ${image_name}:${env._version} ${image_name}:test_latest
+                            docker push ${image_name}:${env._version}
+                            docker rmi -f ${image_name}:${env._version}
                             """
                         }
                     } catch (e) {
@@ -121,6 +120,7 @@ pipeline {
                         }
 
                         sh """
+                        ssh root@${node} 'echo "IMAGE_TAG=${env._version}" > /etc/${env.service_name}/.env'
                         ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p magi-backend down --remove-orphans || true'
                         ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p magi-backend up -d'
                         echo "服务部署成功：${env.service_name}"
