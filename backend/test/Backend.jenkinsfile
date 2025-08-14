@@ -3,7 +3,7 @@ pipeline {
     tools {git 'Default'}
 
     environment {
-        branch = 'branch0723'
+        branch = 'branch0815'
         SERVICE_ENV = "test"
         service_name = 'backend'
         group_id = 'Backend'

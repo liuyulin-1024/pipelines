@@ -3,10 +3,8 @@ pipeline {
     tools {git 'Default'}
 
     environment {
-        branch = 'branch0723'
+        branch = 'branch0815'
         SERVICE_ENV = "prod"
-        internal_port1 = 80
-        external_port1 = 18000
         service_name = 'backend'
         group_id = 'Backend'
         docker_data_id = 'pro.yaml'
