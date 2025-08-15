@@ -1,3 +1,23 @@
+def alertFeishu(isSuccess) {
+    def status = isSuccess ? "✅" : "❌"
+    def committer = sh(script: "git log -1 --pretty=format:%an", returnStdout: true).trim()
+    def triggerUser = currentBuild.getBuildCauses()[0].userId
+    def text = """构建提醒
+    - 服务：${env.service_name}
+    - 环境：开发服
+    - 是否成功：${status}
+    - 构建分支：${env.branch}
+    - 构建人：${triggerUser}
+    - 构建详情：${env.BUILD_URL}
+"""
+    def filename = "${env.service_name}_feishu_payload.json"
+    def payload = groovy.json.JsonOutput.toJson([msg_type: 'text', content: [text: text]])
+    writeFile file: "${filename}", text: payload, encoding: 'UTF-8'
+    sh """
+      curl -sS -X POST -H 'Content-Type: application/json' --data-binary @'${filename}' '${env.feishu_webhook_url}'
+    """
+}
+
 pipeline {
     agent any
     tools {git 'Default'}
@@ -15,6 +35,7 @@ pipeline {
         repository_url = "git@github.com:AutoGameAI/Backend.git"
         GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
         namespace_id = '9cae255e-c01b-4fa3-bfcd-c0bb3030a565&namespaceId=9cae255e-c01b-4fa3-bfcd-c0bb3030a565'
+        feishu_webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/f45444e3-c2e5-4ea9-8b06-91204ddbeea6"
     }
 
     options {
@@ -133,5 +154,10 @@ pipeline {
                 }
             }
         }
+    }
+
+    post {
+        success { script { alertFeishu(true) } }
+        failure { script { alertFeishu(false) } }
     }
 }
