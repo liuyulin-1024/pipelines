@@ -23,7 +23,7 @@ pipeline {
     tools {git 'Default'}
 
     environment {
-        branch = 'branch0815'
+        branch = 'main'
         SERVICE_ENV = "test"
         service_name = 'backend'
         group_id = 'Backend'
