@@ -1,12 +1,10 @@
-// 飞书告警：https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN#272b1dee
-// API调试台：https://open.feishu.cn/api-explorer/cli_a8286593e4b7900d?apiName=create&project=im&resource=message&version=v1
 def alertFeishu(isSuccess) {
     def status = isSuccess ? "✅" : "❌"
     def committer = sh(script: "git log -1 --pretty=format:%an", returnStdout: true).trim()
     def triggerUser = currentBuild.getBuildCauses()[0].userId
-    def text = """构建提醒<at user_id="ou_b4c11eafc4c92be454bb89cfcf431da0">王超</at>
+    def text = """构建提醒
     - 服务：${env.service_name}
-    - 环境：正式服
+    - 环境：稳定版测试服
     - 是否成功：${status}
     - 构建分支：${env.branch}
     - 构建人：${triggerUser}
@@ -25,12 +23,12 @@ pipeline {
     tools {git 'Default'}
 
     environment {
-        branch = 'branch0815'
-        // branch = 'branch0723'
-        SERVICE_ENV = "prod"
+        branch = 'main'
+        SERVICE_ENV = "test_stable"
         service_name = 'backend'
+        project_name = 'magi-backend-stable'
         group_id = 'Backend'
-        docker_data_id = 'pro.yaml'
+        docker_data_id = 'test_stable.yaml'
         credentials_data_id = 'credentials.json'
         image_name = "${harbor_domain}/backend/${service_name}"
         repository_url = "git@github.com:AutoGameAI/Backend.git"
@@ -57,7 +55,7 @@ pipeline {
         stage('Prepare Environment') {
             steps {
                 script {
-                    env._version = "prod_" + new Date().format('yyyyMMddHHmmss')
+                    env._version = env.SERVICE_ENV + new Date().format('yyyyMMddHHmmss')
                     echo "构建分支：${env.branch} 版本号：${env._version}"
                 }
             }
@@ -110,7 +108,7 @@ pipeline {
             steps {
                 script {
                     try {
-                        def node = env.prod_node_1
+                        def node = env.test_node_1
                         echo "部署服务：${node}"
                         withCredentials([
                             string(credentialsId: 'harbor_username', variable: 'HARBOR_USERNAME'),
@@ -145,8 +143,8 @@ pipeline {
 
                         sh """
                         ssh root@${node} 'echo "IMAGE_TAG=${env._version}" > /etc/${env.service_name}/.env'
-                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p magi-backend down --remove-orphans || true'
-                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p magi-backend up -d'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ${env.project_name} down --remove-orphans || true'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ${env.project_name} up -d'
                         echo "服务部署成功：${env.service_name}"
                         """
                     } catch (e) {
