@@ -6,7 +6,7 @@ def alertFeishu(isSuccess) {
     - 服务：${env.service_name}
     - 环境：测试服
     - 是否成功：${status}
-    - 构建分支：${env.branch}
+    - 构建分支：${params.branch}
     - 构建人：${triggerUser}
     - 构建详情：${env.BUILD_URL}
 """
@@ -23,7 +23,6 @@ pipeline {
     tools {git 'Default'}
 
     environment {
-        branch = 'main'
         SERVICE_ENV = "test"
         service_name = 'backend'
         group_id = 'Backend'
@@ -55,14 +54,14 @@ pipeline {
             steps {
                 script {
                     env._version = "test_" + new Date().format('yyyyMMddHHmmss')
-                    echo "构建分支：${env.branch} 版本号：${env._version}"
+                    echo "构建分支：${params.branch} 版本号：${env._version}"
                 }
             }
         }
 
         stage('Get Code') {
             steps {
-                echo "拉取项目代码：${env.branch}"
+                echo "拉取项目代码：${params.branch}"
                 dir('app') {
                     checkout([
                         $class: 'GitSCM',
