@@ -1,0 +1,163 @@
+// 飞书告警：https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN#272b1dee
+// API调试台：https://open.feishu.cn/api-explorer/cli_a8286593e4b7900d?apiName=create&project=im&resource=message&version=v1
+def alertFeishu(isSuccess) {
+    def status = isSuccess ? "✅" : "❌"
+    def committer = sh(script: "git log -1 --pretty=format:%an", returnStdout: true).trim()
+    def triggerUser = currentBuild.getBuildCauses()[0].userId
+    def text = """构建提醒<at user_id="ou_b4c11eafc4c92be454bb89cfcf431da0">王超</at>
+    - 服务：${env.service_name}
+    - 环境：正式服
+    - 是否成功：${status}
+    - 构建分支：${params.branch}
+    - 构建人：${triggerUser}
+    - 构建详情：${env.BUILD_URL}
+"""
+    def filename = "${env.service_name}_feishu_payload.json"
+    def payload = groovy.json.JsonOutput.toJson([msg_type: 'text', content: [text: text]])
+    writeFile file: "${filename}", text: payload, encoding: 'UTF-8'
+    sh """
+      curl -sS -X POST -H 'Content-Type: application/json' --data-binary @'${filename}' '${env.feishu_webhook_url}'
+    """
+}
+
+pipeline {
+    agent any
+    tools {git 'Default'}
+
+    environment {
+        service_name = 'ops'
+        group_id="OPS"
+        namespace_id="9cae255e-c01b-4fa3-bfcd-c0bb3030a565"
+        data_ids="docker-compose.yaml:pro.yaml .env:.env"
+        image_name = "${harbor_domain}/backend/${service_name}"
+        repository_url = "git@github.com:AutoGameAI/AutoGame_Ops.git"
+        GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+        feishu_webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/f45444e3-c2e5-4ea9-8b06-91204ddbeea6"
+    }
+
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 60, unit: 'MINUTES')
+    }
+
+    stages {
+        stage('Check Workspace') {
+            steps {
+                script {
+                    echo "当前工作目录: ${WORKSPACE}"
+                    sh "rm -rf ./app"
+                }
+            }
+        }
+
+        stage('Prepare Environment') {
+            steps {
+                script {
+                    env._version = "prod_" + new Date().format('yyyyMMddHHmmss')
+                    echo "构建分支：${params.branch} 版本号：${env._version}"
+                }
+            }
+        }
+
+        stage('Get Code') {
+            steps {
+                echo "拉取项目代码：${params.branch}"
+                dir('app') {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: branch]],
+                        userRemoteConfigs: [[
+                            url: repository_url,
+                            credentialsId: 'GitHubSSH'
+                        ]]
+                    ])
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    try {
+                        echo "构建镜像"
+                        dir('app') {
+                            withCredentials([
+                                string(credentialsId: 'harbor_username', variable: 'HARBOR_USERNAME'),
+                                string(credentialsId: 'harbor_password', variable: 'HARBOR_PASSWORD')
+                            ]) {
+                                sh """
+                                echo "$HARBOR_PASSWORD" | docker login ${harbor_domain} -u $HARBOR_USERNAME --password-stdin
+                                """
+                            }
+                            sh """
+                            docker build -f autogame-ops-backend/Dockerfile -t ${image_name}-backend:${env._version} .
+                            docker build -f autogame-ops-vue/Dockerfile -t ${image_name}-frontend:${env._version} .
+                            docker push ${image_name}-backend:${env._version}
+                            docker push ${image_name}-frontend:${env._version}
+                            docker rmi -f ${image_name}-backend:${env._version}
+                            docker rmi -f ${image_name}-frontend:${env._version}
+                            """
+                        }
+                    } catch (e) {
+                        error "构建镜像失败: ${e}"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Service') {
+            steps {
+                script {
+                    try {
+                        def node = env.prod_node_1
+                        echo "部署服务：${node}"
+                        withCredentials([
+                            string(credentialsId: 'harbor_username', variable: 'HARBOR_USERNAME'),
+                            string(credentialsId: 'harbor_password', variable: 'HARBOR_PASSWORD')
+                        ]) {
+                            sh """
+                            echo "$HARBOR_PASSWORD" | ssh -o StrictHostKeyChecking=no root@${node} 'docker login ${harbor_domain} -u $HARBOR_USERNAME --password-stdin'
+                            """
+                        }
+
+                        withCredentials([
+                            usernamePassword(
+                                credentialsId: 'NacosAccount',
+                                usernameVariable: 'nacos_username',
+                                passwordVariable: 'nacos_password'
+                            )
+                        ]) {
+                            configFileProvider([configFile(
+                                fileId: 'FetchConfigsFromNacos',
+                                targetLocation: 'fetch_nacos.sh'
+                            )]) {
+                                sh """
+                                bash fetch_nacos.sh
+                                ssh root@${node} 'mkdir -p /etc/${env.service_name}/'
+                                scp -o StrictHostKeyChecking=no .env root@${node}:/etc/${env.service_name}/
+                                scp -o StrictHostKeyChecking=no docker-compose.yaml root@${node}:/etc/${env.service_name}/
+                                rm docker-compose.yaml .env
+                                """
+                                echo "[Nacos] 配置已推送到 ${node}"
+                            }
+                        }
+
+                        sh """
+                        ssh root@${node} 'echo "IMAGE_TAG=${env._version}" >> /etc/${env.service_name}/.env'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ops down --remove-orphans || true'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ops up -d'
+                        echo "服务部署成功：${env.service_name}"
+                        """
+                    } catch (e) {
+                        error "服务部署失败: ${e}"
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success { script { alertFeishu(true) } }
+        failure { script { alertFeishu(false) } }
+    }
+}
