@@ -29,7 +29,7 @@ pipeline {
         group_id = 'Backend'
         project_name = 'magi-backend'
         data_ids="docker-compose.yaml:dev.yaml credentials.json:credentials.json"
-        namespace_id = '9cae255e-c01b-4fa3-bfcd-c0bb3030a565&namespaceId=9cae255e-c01b-4fa3-bfcd-c0bb3030a565'
+        namespace_id = '9cae255e-c01b-4fa3-bfcd-c0bb3030a565'
         image_name = "${harbor_domain}/backend/${service_name}"
         repository_url = "git@github.com:AutoGameAI/Backend.git"
         GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
