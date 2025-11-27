@@ -90,11 +90,14 @@ pipeline {
                                 """
                             }
                             sh """
-                            docker build -f autogame-ops-backend/Dockerfile -t ${image_name}-backend:${env._version} .
-                            docker build -f autogame-ops-vue/Dockerfile -t ${image_name}-frontend:${env._version} .
+                            cd autogame-ops-backend
+                            docker build -t ${image_name}-backend:${env._version} .
                             docker push ${image_name}-backend:${env._version}
-                            docker push ${image_name}-frontend:${env._version}
                             docker rmi -f ${image_name}-backend:${env._version}
+
+                            cd ../autogame-ops-vue
+                            docker build -t ${image_name}-frontend:${env._version} .
+                            docker push ${image_name}-frontend:${env._version}
                             docker rmi -f ${image_name}-frontend:${env._version}
                             """
                         }
