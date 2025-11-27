@@ -1,5 +1,3 @@
-// 飞书告警：https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN#272b1dee
-// API调试台：https://open.feishu.cn/api-explorer/cli_a8286593e4b7900d?apiName=create&project=im&resource=message&version=v1
 def alertFeishu(isSuccess) {
     def status = isSuccess ? "✅" : "❌"
     def committer = sh(script: "git log -1 --pretty=format:%an", returnStdout: true).trim()
@@ -26,9 +24,10 @@ pipeline {
 
     environment {
         service_name = 'ops'
-        group_id="OPS"
-        namespace_id="9cae255e-c01b-4fa3-bfcd-c0bb3030a565"
-        data_ids="docker-compose.yaml:pro.yaml .env:.env"
+        group_id = "OPS"
+        project_name = 'ops'
+        namespace_id = "9cae255e-c01b-4fa3-bfcd-c0bb3030a565"
+        data_ids = "docker-compose.yaml:pro.yaml .env:.env"
         image_name = "${harbor_domain}/backend/${service_name}"
         repository_url = "git@github.com:AutoGameAI/AutoGame_Ops.git"
         GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
@@ -147,8 +146,8 @@ pipeline {
 
                         sh """
                         ssh root@${node} 'echo "IMAGE_TAG=${env._version}" >> /etc/${env.service_name}/.env'
-                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ops down --remove-orphans || true'
-                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ops up -d'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ${env.project_name} down --remove-orphans || true'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ${env.project_name} up -d'
                         echo "服务部署成功：${env.service_name}"
                         """
                     } catch (e) {

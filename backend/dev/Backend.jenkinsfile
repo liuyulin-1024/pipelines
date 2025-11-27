@@ -25,16 +25,14 @@ pipeline {
     environment {
         branch = 'main'
         SERVICE_ENV = "dev"
-        internal_port1 = 80
-        external_port1 = 18000
         service_name = 'backend'
         group_id = 'Backend'
-        docker_data_id = 'dev.yaml'
-        credentials_data_id = 'credentials.json'
+        project_name = 'magi-backend'
+        data_ids="docker-compose.yaml:dev.yaml credentials.json:credentials.json"
+        namespace_id = '9cae255e-c01b-4fa3-bfcd-c0bb3030a565&namespaceId=9cae255e-c01b-4fa3-bfcd-c0bb3030a565'
         image_name = "${harbor_domain}/backend/${service_name}"
         repository_url = "git@github.com:AutoGameAI/Backend.git"
         GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
-        namespace_id = '9cae255e-c01b-4fa3-bfcd-c0bb3030a565&namespaceId=9cae255e-c01b-4fa3-bfcd-c0bb3030a565'
         feishu_webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/f45444e3-c2e5-4ea9-8b06-91204ddbeea6"
     }
 
@@ -128,7 +126,7 @@ pipeline {
                             )
                         ]) {
                             configFileProvider([configFile(
-                                fileId: 'FetchConfigFromNacos',
+                                fileId: 'FetchConfigsFromNacos',
                                 targetLocation: 'fetch_nacos.sh'
                             )]) {
                                 sh """
@@ -144,8 +142,8 @@ pipeline {
 
                         sh """
                         ssh root@${node} 'echo "IMAGE_TAG=${env._version}" > /etc/${env.service_name}/.env'
-                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p magi-backend down --remove-orphans || true'
-                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p magi-backend up -d'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ${env.project_name} down --remove-orphans || true'
+                        ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ${env.project_name} up -d'
                         echo "服务部署成功：${env.service_name}"
                         """
                     } catch (e) {

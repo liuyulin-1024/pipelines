@@ -28,12 +28,11 @@ pipeline {
         service_name = 'backend'
         project_name = 'magi-backend-stable'
         group_id = 'Backend'
-        docker_data_id = 'test_stable.yaml'
-        credentials_data_id = 'credentials.json'
+        namespace_id = '9cae255e-c01b-4fa3-bfcd-c0bb3030a565'
+        data_ids="docker-compose.yaml:test_stable.yaml credentials.json:credentials.json"
         image_name = "${harbor_domain}/backend/${service_name}"
         repository_url = "git@github.com:AutoGameAI/Backend.git"
         GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
-        namespace_id = '9cae255e-c01b-4fa3-bfcd-c0bb3030a565&namespaceId=9cae255e-c01b-4fa3-bfcd-c0bb3030a565'
         feishu_webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/f45444e3-c2e5-4ea9-8b06-91204ddbeea6"
     }
 
