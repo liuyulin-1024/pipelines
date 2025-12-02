@@ -1,0 +1,249 @@
+import groovy.transform.Field
+
+def notifyFeishu(isSuccess, detailMessage = '') {
+    url = "https://open.feishu.cn/open-apis/bot/v2/hook/e51cc278-bfdd-41ab-9dd5-4ff6eef8892d"
+    configFileProvider([configFile(fileId: "AlertFeishu", targetLocation: 'AlertFeishu.groovy')]) {
+        def notifier = load 'AlertFeishu.groovy'
+        notifier.call(url, isSuccess, detailMessage)
+        sh "rm -f AlertFeishu.groovy"
+    }
+}
+
+List<String> parseHosts(String raw) {
+    return raw?.split(',')?.collect { it.trim() }?.findAll { it } ?: []
+}
+
+String shellQuote(String raw) {
+    def safe = raw ?: ''
+    return "'" + safe.replace("'", "'\"'\"'") + "'"
+}
+
+List<Map> loadCertConfigs(String raw) {
+    def domainList = raw
+        ?.split(',')
+        ?.collect { it.trim() }
+        ?.findAll { it }
+
+    if (!domainList) {
+        error "CERT_CONFIGS 必须提供至少一个域名，使用逗号分隔"
+    }
+
+    return domainList.collect { inputDomain ->
+        def baseDomain = inputDomain.startsWith('*.') ? inputDomain.substring(2) : inputDomain
+        if (!baseDomain) {
+            error "CERT_CONFIGS 中存在空域名"
+        }
+        def wildcard = "*.${baseDomain}"
+        def domains = [baseDomain, wildcard].unique()
+        [
+            certName    : baseDomain,
+            domains     : domains,
+            remoteDir   : "/etc/letsencrypt/live/${baseDomain}",
+            deploySubDir: baseDomain
+        ]
+    }
+}
+
+String buildCertbotCommand(Map certCfg, String extraArgs) {
+    def domainArgs = certCfg.domains.collect { "-d ${it}" }.join(' ')
+    def baseArgs = extraArgs?.trim() ?: "--manual --preferred-challenges dns --manual-public-ip-logging-ok --keep-until-expiring --expand --agree-tos"
+    return "certbot certonly --cert-name ${certCfg.certName} ${baseArgs} ${domainArgs} --non-interactive"
+}
+
+@Field
+List<String> targetHosts = []
+
+@Field
+String issuerHost = ''
+
+@Field
+String certArtifactDir = ''
+
+@Field
+List<Map> certConfigs = []
+
+@Field
+Map<String, String> certExpirations = [:]
+
+pipeline {
+    agent any
+
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
+    parameters {
+        string(name: 'CERT_CONFIGS', defaultValue: 'autogame.ai,api.autogame.ai', description: '逗号分隔的域名列表，将自动包含域名与其通配符，证书路径固定 /etc/letsencrypt/live/{域名}')
+        string(name: 'CERTBOT_EXTRA_ARGS', defaultValue: '--manual --preferred-challenges dns --manual-public-ip-logging-ok --keep-until-expiring --expand --agree-tos', description: 'certbot 额外参数（可包含 DNS 插件配置）')
+        string(name: 'TARGET_HOSTS', defaultValue: '47.76.145.1,8.223.47.182,47.243.78.174,47.238.110.20', description: '需要同步证书的目标机器，逗号分隔')
+        string(name: 'CERT_ISSUER_HOST', defaultValue: '47.239.74.91', description: '执行 certbot 的证书颁发机')
+        string(name: 'CERT_PUBLIC_FILE', defaultValue: 'fullchain.pem', description: '公钥文件名')
+        string(name: 'CERT_PRIVATE_FILE', defaultValue: 'privkey.pem', description: '私钥文件名')
+        string(name: 'DEPLOY_PATH', defaultValue: '/etc/nginx/certs', description: '目标机器证书部署目录')
+    }
+
+    environment {
+        service_name = 'cert-renewal'
+    }
+
+    stages {
+        stage('Prepare Inputs & Workspace') {
+            steps {
+                script {
+                    issuerHost = params.CERT_ISSUER_HOST?.trim()
+                    if (!issuerHost) {
+                        error "CERT_ISSUER_HOST 不能为空"
+                    }
+
+                    certConfigs = loadCertConfigs(params.CERT_CONFIGS)
+                    if (certConfigs.isEmpty()) {
+                        error "CERT_CONFIGS 至少需要一个证书配置"
+                    }
+
+                    targetHosts = parseHosts(params.TARGET_HOSTS)
+                    if (targetHosts.isEmpty()) {
+                        error "TARGET_HOSTS 至少需要一个有效主机"
+                    }
+
+                    certArtifactDir = "${env.WORKSPACE}/cert-artifacts"
+                    sh "rm -rf ${certArtifactDir} && mkdir -p ${certArtifactDir}"
+
+                    env.NOTIFY_DOMAIN = certConfigs
+                        .collectMany { it.domains }
+                        .unique()
+                        .join(', ')
+                    env.NOTIFY_HOSTS = targetHosts.join(', ')
+                    env.NEW_EXPIRATION = ''
+                }
+            }
+        }
+
+        stage('Check Current Expiration') {
+            steps {
+                script {
+                    targetHosts.each { host ->
+                        certConfigs.each { cfg ->
+                            def remoteDeployDir = "${params.DEPLOY_PATH}/${cfg.deploySubDir}"
+                            echo "检查 ${host} 上 ${cfg.certName} 证书到期时间"
+                            sh """
+                            set -e
+                            ssh -o StrictHostKeyChecking=no root@${host} 'openssl x509 -noout -enddate -in ${remoteDeployDir}/${params.CERT_PUBLIC_FILE}' || true
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Renew Certificates (certbot)') {
+            steps {
+                script {
+                    certConfigs.each { cfg ->
+                        def renewCmd = buildCertbotCommand(cfg, params.CERTBOT_EXTRA_ARGS)
+                        echo "在 ${issuerHost} 上执行 certbot：${cfg.certName}"
+                        sh """
+                        set -e
+                        ssh -o StrictHostKeyChecking=no root@${issuerHost} ${shellQuote(renewCmd)}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Fetch Certificate Artifacts') {
+            steps {
+                script {
+                    certConfigs.each { cfg ->
+                        def localDir = "${certArtifactDir}/${cfg.deploySubDir}"
+                        sh """
+                        set -e
+                        mkdir -p ${localDir}
+                        scp -o StrictHostKeyChecking=no root@${issuerHost}:${cfg.remoteDir}/${params.CERT_PUBLIC_FILE} ${localDir}/${params.CERT_PUBLIC_FILE}
+                        scp -o StrictHostKeyChecking=no root@${issuerHost}:${cfg.remoteDir}/${params.CERT_PRIVATE_FILE} ${localDir}/${params.CERT_PRIVATE_FILE}
+                        chmod 600 ${localDir}/${params.CERT_PRIVATE_FILE}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Distribute Certificates') {
+            steps {
+                script {
+                    targetHosts.each { host ->
+                        certConfigs.each { cfg ->
+                            def remoteDeployDir = "${params.DEPLOY_PATH}/${cfg.deploySubDir}"
+                            def localDir = "${certArtifactDir}/${cfg.deploySubDir}"
+                            echo "分发 ${cfg.certName} 证书到 ${host}"
+                            sh """
+                            set -e
+                            ssh -o StrictHostKeyChecking=no root@${host} 'mkdir -p ${remoteDeployDir}'
+                            scp -o StrictHostKeyChecking=no ${localDir}/${params.CERT_PUBLIC_FILE} root@${host}:${remoteDeployDir}/${params.CERT_PUBLIC_FILE}
+                            scp -o StrictHostKeyChecking=no ${localDir}/${params.CERT_PRIVATE_FILE} root@${host}:${remoteDeployDir}/${params.CERT_PRIVATE_FILE}
+                            ssh -o StrictHostKeyChecking=no root@${host} 'chmod 600 ${remoteDeployDir}/${params.CERT_PRIVATE_FILE}'
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Reload & Verify') {
+            steps {
+                script {
+                    def restartCommand = "systemctl restart nginx"
+
+                    targetHosts.each { host ->
+                        echo "证书替换完成，重启 ${host} 上的 nginx"
+                        sh """
+                        set -e
+                        ssh -o StrictHostKeyChecking=no root@${host} ${shellQuote(restartCommand)}
+                        """
+
+                        certConfigs.each { cfg ->
+                            def remoteDeployDir = "${params.DEPLOY_PATH}/${cfg.deploySubDir}"
+                            echo "校验 ${host} 上 ${cfg.certName} 新证书到期时间"
+                            sh """
+                            set -e
+                            ssh -o StrictHostKeyChecking=no root@${host} 'openssl x509 -noout -enddate -in ${remoteDeployDir}/${params.CERT_PUBLIC_FILE}'
+                            """
+                        }
+                    }
+
+                    certExpirations = certConfigs.collectEntries { cfg ->
+                        def localDir = "${certArtifactDir}/${cfg.deploySubDir}"
+                        def expiration = sh(
+                            script: "openssl x509 -noout -enddate -in ${localDir}/${params.CERT_PUBLIC_FILE} | cut -d= -f2",
+                            returnStdout: true
+                        ).trim()
+                        [(cfg.certName): expiration]
+                    }
+
+                    env.NEW_EXPIRATION = certExpirations.collect { k, v -> "${k}:${v}" }.join('; ')
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                if (certArtifactDir?.trim()) {
+                    sh "rm -rf ${certArtifactDir}"
+                }
+            }
+        }
+        success {
+            script {
+                notifyFeishu(true, "证书已完成续期与分发")
+            }
+        }
+        failure {
+            script {
+                notifyFeishu(false, "证书续期失败，请查看 Jenkins Log")
+            }
+        }
+    }
+}
+
