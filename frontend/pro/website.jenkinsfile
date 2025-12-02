@@ -1,0 +1,172 @@
+def alertFeishu(isSuccess) {
+    // def webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/e51cc278-bfdd-41ab-9dd5-4ff6eef8892d"
+    def webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/f45444e3-c2e5-4ea9-8b06-91204ddbeea6"
+    def status = isSuccess ? "✅" : "❌"
+    def committer = sh(script: "git log -1 --pretty=format:%an", returnStdout: true).trim()
+    def triggerUser = currentBuild.getBuildCauses()[0].userId
+    def text = """构建提醒<at user_id="ou_b4c11eafc4c92be454bb89cfcf431da0">王超</at>
+    - 服务：${env.service_name}
+    - 环境：正式服
+    - 是否成功：${status}
+    - 构建分支：${env.branch}
+    - 构建人：${triggerUser}
+    - 构建详情：${env.BUILD_URL}
+"""
+    def filename = "${env.service_name}_feishu_payload.json"
+    def payload = groovy.json.JsonOutput.toJson([msg_type: 'text', content: [text: text]])
+    writeFile file: "${filename}", text: payload, encoding: 'UTF-8'
+    sh """
+      curl -sS -X POST -H 'Content-Type: application/json' --data-binary @'${filename}' '${webhook_url}'
+    """
+}
+
+def deployToNode(node, composeFilename, nginxFilename) {
+    echo "部署服务到节点：${node}"
+    
+    // Harbor 登录
+    withCredentials([
+        string(credentialsId: 'harbor_username', variable: 'HARBOR_USERNAME'),
+        string(credentialsId: 'harbor_password', variable: 'HARBOR_PASSWORD')
+    ]) {
+        sh """
+        echo "$HARBOR_PASSWORD" | ssh -o StrictHostKeyChecking=no root@${node} 'docker login ${harbor_domain} -u $HARBOR_USERNAME --password-stdin'
+        """
+    }
+
+    // 获取 Nacos 配置并部署
+    withCredentials([
+        usernamePassword(
+            credentialsId: 'NacosAccount',
+            usernameVariable: 'nacos_username',
+            passwordVariable: 'nacos_password'
+        )
+    ]) {
+        configFileProvider([configFile(
+            fileId: 'FetchConfigsFromNacos',
+            targetLocation: 'fetch_nacos.sh'
+        )]) {
+            sh """
+            bash fetch_nacos.sh
+            ssh root@${node} 'mkdir -p /etc/${env.service_name}/'
+            scp -o StrictHostKeyChecking=no .env root@${node}:/etc/${env.service_name}/
+            scp -o StrictHostKeyChecking=no ${composeFilename} root@${node}:/etc/${env.service_name}/docker-compose.yaml
+            scp -o StrictHostKeyChecking=no ${nginxFilename} root@${node}:/etc/${env.service_name}/nginx.conf
+            rm .env ${composeFilename} ${nginxFilename}
+            """
+            echo "[Nacos] 配置已推送到 ${node}"
+        }
+    }
+
+    // 启动服务
+    sh """
+    ssh root@${node} 'echo "IMAGE_TAG=${env._version}" >> /etc/${env.service_name}/.env'
+    ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ${env.project_name} down --remove-orphans || true'
+    ssh root@${node} 'docker-compose -f /etc/${env.service_name}/docker-compose.yaml -p ${env.project_name} up -d'
+    echo "服务部署成功：${env.service_name} -> ${node}"
+    """
+}
+
+pipeline {
+    agent any
+    tools {git 'Default'}
+
+    environment {
+        service_name = 'website'
+        branch = 'main'
+        group_id = "website"
+        project_name = 'website'
+        namespace_id = "e814550d-0660-43ed-b642-da43e71614ba"
+        data_ids = ".env:.env global.yaml:global.yaml global.conf:global.conf china.yaml:china.yaml china.conf:china.conf"
+        image_name = "${harbor_domain}/frontend/${service_name}"
+        repository_url = "git@github.com:AutoGameAI/website.git"
+        GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    }
+
+    options {
+        disableConcurrentBuilds()
+        timeout(time: 60, unit: 'MINUTES')
+    }
+
+    stages {
+        stage('Check Workspace') {
+            steps {
+                script {
+                    echo "当前工作目录: ${WORKSPACE}"
+                    sh "rm -rf ./app"
+                }
+            }
+        }
+
+        stage('Prepare Environment') {
+            steps {
+                script {
+                    env._version = "prod_" + new Date().format('yyyyMMddHHmmss')
+                    echo "构建分支：${env.branch} 版本号：${env._version}"
+                }
+            }
+        }
+
+        stage('Get Code') {
+            steps {
+                echo "拉取项目代码：${env.branch}"
+                dir('app') {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: env.branch]],
+                        userRemoteConfigs: [[
+                            url: repository_url,
+                            credentialsId: 'GitHubSSH'
+                        ]]
+                    ])
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    try {
+                        echo "构建镜像"
+                        dir('app') {
+                            withCredentials([
+                                string(credentialsId: 'harbor_username', variable: 'HARBOR_USERNAME'),
+                                string(credentialsId: 'harbor_password', variable: 'HARBOR_PASSWORD')
+                            ]) {
+                                sh """
+                                echo "$HARBOR_PASSWORD" | docker login ${harbor_domain} -u $HARBOR_USERNAME --password-stdin
+                                """
+                            }
+                            sh """
+                            docker build -t ${image_name}:${env._version} .
+                            docker push ${image_name}:${env._version}
+                            docker rmi -f ${image_name}:${env._version}
+                            """
+                        }
+                    } catch (e) {
+                        error "构建镜像失败: ${e}"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Service') {
+            steps {
+                script {
+                    try {
+                        // autogame.ai
+                        deployToNode("47.238.110.20", "global.yaml", "global.conf")
+                        // autogame.cn
+                        deployToNode("121.43.170.250", "china.yaml", "china.conf")
+                    } catch (e) {
+                        error "服务部署失败: ${e}"
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success { script { alertFeishu(true) } }
+        failure { script { alertFeishu(false) } }
+    }
+}
