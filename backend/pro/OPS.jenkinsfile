@@ -27,7 +27,7 @@ pipeline {
         group_id = "OPS"
         project_name = 'ops'
         namespace_id = "9cae255e-c01b-4fa3-bfcd-c0bb3030a565"
-        data_ids = "docker-compose.yaml:pro.yaml .env:.env"
+        data_ids = "docker-compose.yaml:pro.yaml .env:.env nginx.conf:nginx.conf"
         image_name = "${harbor_domain}/backend/${service_name}"
         repository_url = "git@github.com:AutoGameAI/AutoGame_Ops.git"
         GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
@@ -137,8 +137,9 @@ pipeline {
                                 bash fetch_nacos.sh
                                 ssh root@${node} 'mkdir -p /etc/${env.service_name}/'
                                 scp -o StrictHostKeyChecking=no .env root@${node}:/etc/${env.service_name}/
+                                scp -o StrictHostKeyChecking=no nginx.conf root@${node}:/etc/${env.service_name}/
                                 scp -o StrictHostKeyChecking=no docker-compose.yaml root@${node}:/etc/${env.service_name}/
-                                rm docker-compose.yaml .env
+                                rm docker-compose.yaml nginx.conf .env
                                 """
                                 echo "[Nacos] 配置已推送到 ${node}"
                             }
